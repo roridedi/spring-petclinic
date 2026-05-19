@@ -53,3 +53,17 @@ CREATE TABLE IF NOT EXISTS visits (
   description VARCHAR(255),
   FOREIGN KEY (pet_id) REFERENCES pets(id)
 ) engine=InnoDB;
+
+CREATE TABLE IF NOT EXISTS appointments (
+  id INT(4) UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  pet_id INT(4) UNSIGNED NOT NULL,
+  vet_id INT(4) UNSIGNED NOT NULL,
+  start_time DATETIME NOT NULL,
+  duration_minutes INT NOT NULL DEFAULT 30,
+  reason VARCHAR(255),
+  status VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED',
+  created_at DATETIME NOT NULL,
+  INDEX appointments_vet_id_start_time (vet_id, start_time),
+  FOREIGN KEY (pet_id) REFERENCES pets(id),
+  FOREIGN KEY (vet_id) REFERENCES vets(id)
+) engine=InnoDB;
