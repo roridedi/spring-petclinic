@@ -1,0 +1,196 @@
+{
+  "project": "spring-petclinic",
+  "branchName": "ralph/appointment-scheduling",
+  "description": "Appointment Scheduling — let pet owners self-book vet visits online. New Appointment entity (separate from the existing completed-visit Visit entity), fixed Mon–Fri 9–5 30-minute slots, double-booking prevention, email confirmation, and a 24h reminder. Source PRD: tasks/prd-appointment-scheduling.md.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add Appointment entity, repository, and DB schemas",
+      "description": "As a developer, I need an Appointment domain entity persisted to the database so future appointments can be stored independently of historical Visit records.",
+      "acceptanceCriteria": [
+        "Entity org.springframework.samples.petclinic.owner.Appointment extends BaseEntity with fields: pet (@ManyToOne → Pet), vet (@ManyToOne → Vet), startTime (LocalDateTime, @NotNull + @Future), durationMinutes (int, default 30), reason (String, @Size(max=255)), status enum (SCHEDULED/CANCELLED/COMPLETED, default SCHEDULED, @Enumerated(STRING)), createdAt (LocalDateTime set via @PrePersist)",
+        "AppointmentRepository extends JpaRepository<Appointment, Integer> with findByPetId, findByVetIdAndStartTimeBetween, findByStartTimeBetween (save/findById/delete inherited)",
+        "appointments table added to src/main/resources/db/h2/schema.sql, db/mysql/schema.sql, db/postgres/schema.sql with FKs to pets(id) and vets(id) and index on (vet_id, start_time); h2 DROP ordering updated so appointments drops before pets/vets",
+        "Build passes (mvn test and ./gradlew test)"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Completed 2026-05-19. Files: src/main/java/.../owner/Appointment.java, AppointmentRepository.java; schemas updated in h2, mysql, postgres. Maven + Gradle tests pass. Caveat: @Future on startTime runs on every JPA pre-update; switch to validation groups if a flow ever updates a past-time row (e.g. the fulfillment-as-Visit flow in PRD Open Questions §9). Comment noting this is in Appointment.java."
+    },
+    {
+      "id": "US-002",
+      "title": "Slot computation service",
+      "description": "As a developer, I need a service that returns the available appointment slots for a given vet and date, so the UI can show only bookable times.",
+      "acceptanceCriteria": [
+        "New AppointmentSlotService in org.springframework.samples.petclinic.owner with method List<LocalDateTime> availableSlots(int vetId, LocalDate date)",
+        "Working hours hardcoded as constants: Mon–Fri 09:00–17:00, 30-minute slots; weekends return empty list",
+        "Excludes slots already taken by a SCHEDULED appointment for that vet (uses findByVetIdAndStartTimeBetween, filters status = SCHEDULED)",
+        "Excludes past slots when the requested date is today",
+        "Inject Clock for deterministic testing",
+        "Unit test covers: weekday with no bookings returns 16 slots; weekday with one booking returns 15; Saturday returns 0; today with current time after 14:00 returns only slots ≥ next half-hour",
+        "Build passes (mvn test and ./gradlew test)"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Booking form — owner picks vet, date, time",
+      "description": "As an owner, I want to book a future appointment for my pet by selecting a vet, a date, and an available time slot, so I don't have to call the clinic.",
+      "acceptanceCriteria": [
+        "New AppointmentController exposes GET /owners/{ownerId}/pets/{petId}/appointments/new (render form) and POST same path (validate + persist; redirect to /owners/{ownerId} with flash message 'Your appointment is confirmed for <date> <time> with Dr. <vet>')",
+        "GET /api/appointments/slots?vetId={id}&date={yyyy-MM-dd} returns JSON [{\"startTime\":\"...\",\"label\":\"HH:mm\"}] populating the slot dropdown via AJAX",
+        "Date picker defaults to tomorrow; weekends not selectable",
+        "Submitting a slot already taken re-renders the form with error 'That slot was just taken — please pick another.' (FR-5)",
+        "@InitBinder disallows id, *.id, status, createdAt (mirror VisitController pattern)",
+        "New Thymeleaf template src/main/resources/templates/appointments/createAppointmentForm.html reusing fragments/layout.html, inputField.html, selectField.html",
+        "Build passes (mvn test and ./gradlew test)",
+        "Verify in browser using dev-browser skill: happy-path booking; double-booking rejected; weekend dates not selectable"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Owner-facing upcoming appointments list",
+      "description": "As an owner, I want to see my pet's upcoming appointments on the owner details page so I know what's scheduled.",
+      "acceptanceCriteria": [
+        "OwnerController loads upcoming SCHEDULED appointments for each of the owner's pets and exposes them on the model",
+        "src/main/resources/templates/owners/ownerDetails.html shows an 'Upcoming Appointments' section per pet (under or above the existing Visits table) with columns: date, time, vet, reason, Cancel button",
+        "If a pet has no upcoming appointments: section shows 'No upcoming appointments.' and a 'Book appointment' link to /owners/{ownerId}/pets/{petId}/appointments/new",
+        "Build passes (mvn test and ./gradlew test)",
+        "Verify in browser using dev-browser skill: owner with mixed pets (some with, some without appointments) renders correctly"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Cancel an appointment",
+      "description": "As an owner or staff member, I want to cancel an upcoming appointment so the slot is freed up.",
+      "acceptanceCriteria": [
+        "POST /owners/{ownerId}/pets/{petId}/appointments/{appointmentId}/cancel sets status to CANCELLED and persists",
+        "AppointmentSlotService filters on status = SCHEDULED, so cancelled appointments no longer block slots",
+        "Cancelled appointments are hidden from the 'Upcoming Appointments' list (US-004)",
+        "Redirects to /owners/{ownerId} with flash message 'Appointment cancelled.'",
+        "Returns 404 if appointment does not belong to the given pet/owner",
+        "Build passes (mvn test and ./gradlew test)",
+        "Verify in browser using dev-browser skill: cancel an appointment, then confirm the slot is available again on the booking form"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Reschedule an appointment",
+      "description": "As an owner or staff member, I want to change the date/time/vet of an upcoming appointment without cancelling and rebooking.",
+      "acceptanceCriteria": [
+        "GET /owners/{ownerId}/pets/{petId}/appointments/{appointmentId}/edit renders the booking form pre-filled with current vet, date, and slot",
+        "POST same path updates the appointment (only if status = SCHEDULED) with the same future-time and no-double-booking checks as creation, excluding the edited appointment from its own conflict check",
+        "Editing a non-SCHEDULED appointment redirects to the owner page with flash message 'Only scheduled appointments can be edited.'",
+        "Build passes (mvn test and ./gradlew test)",
+        "Verify in browser using dev-browser skill: edit a booking to a different vet/time and confirm the old slot is freed and the new one is taken"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Staff appointment console",
+      "description": "As clinic staff, I want a single page that lists all appointments for a given day across all vets so I can manage the schedule.",
+      "acceptanceCriteria": [
+        "GET /appointments (optional ?date=yyyy-MM-dd, default today) renders a daily schedule",
+        "Table grouped by vet with rows per slot; cells show pet name + owner name + reason, with edit and cancel links",
+        "Date navigation: 'Previous day' and 'Next day' links",
+        "Linked from the top nav (fragments/layout.html) as a new 'Appointments' menu item",
+        "Build passes (mvn test and ./gradlew test)",
+        "Verify in browser using dev-browser skill: navigate days; click edit/cancel actions"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008a",
+      "title": "Add email column to owners",
+      "description": "As a developer, I need an email field on Owner so confirmation/reminder emails have a recipient. (Split from PRD US-008.)",
+      "acceptanceCriteria": [
+        "Add `email` column (optional, max 255) to owners in all three schemas: db/h2/schema.sql, db/mysql/schema.sql, db/postgres/schema.sql",
+        "Add `email` field to Owner.java with @Email and @Size(max=255) (no @NotBlank — optional)",
+        "src/main/resources/templates/owners/createOrUpdateOwnerForm.html gains an email input bound to owner.email",
+        "Existing OwnerControllerTests still pass; add a test covering save/load of email value",
+        "Build passes (mvn test and ./gradlew test)",
+        "Verify in browser using dev-browser skill: edit an owner, save an email, reload and confirm it persists"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "Split from PRD US-008."
+    },
+    {
+      "id": "US-008b",
+      "title": "Add mail starter and AppointmentNotificationService",
+      "description": "As a developer, I need a service that can send confirmation and reminder emails so the booking flows can plug into it. (Split from PRD US-008.)",
+      "acceptanceCriteria": [
+        "Add spring-boot-starter-mail dependency to both pom.xml and build.gradle",
+        "Create AppointmentNotificationService with methods sendConfirmation(Appointment) and sendReminder(Appointment); delegates to JavaMailSender; injects Clock",
+        "Confirmation subject: 'PetClinic appointment confirmed: <date> <time>'; body includes pet, vet, datetime, reason, cancellation link",
+        "Reminder subject: 'Reminder: PetClinic appointment tomorrow at <time>'",
+        "If Owner.email is blank: silently skip sending, log a warning, do not throw",
+        "Mail configured via spring.mail.* in application.properties from environment vars; test profile uses an in-memory / no-op JavaMailSender so tests do not hit the network",
+        "Unit test: JavaMailSender.send invoked exactly once with correct `to` address and non-empty body; second test verifies the blank-email branch skips sending",
+        "Build passes (mvn test and ./gradlew test)"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Split from PRD US-008. Depends on US-008a."
+    },
+    {
+      "id": "US-008c",
+      "title": "Wire notification service into booking and reschedule flows",
+      "description": "As an owner, I want a confirmation email immediately on booking (and on reschedule) so I have a record of my appointment. (Split from PRD US-008.)",
+      "acceptanceCriteria": [
+        "AppointmentController calls AppointmentNotificationService.sendConfirmation(...) after successful create (US-003) and after successful reschedule (US-006)",
+        "Failure of the email send must not roll back the booking — log the error and continue",
+        "Integration test: posting a booking causes one mail send with the booking's startTime and the owner's email",
+        "Build passes (mvn test and ./gradlew test)",
+        "Verify in browser using dev-browser skill: complete a booking with an owner that has an email; via the test mail sender's recorded messages (or a MailHog/local SMTP catcher), confirm an email was produced"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "Split from PRD US-008. Depends on US-008a and US-008b."
+    },
+    {
+      "id": "US-009a",
+      "title": "Add reminder_sent column to appointments",
+      "description": "As a developer, I need a flag on Appointment so the daily reminder job can mark which rows have already been notified. (Split from PRD US-009.)",
+      "acceptanceCriteria": [
+        "Add reminder_sent boolean column (NOT NULL, default false) to appointments in all three schemas",
+        "Add `reminderSent` boolean field to Appointment.java with getter/setter; default false in field initializer",
+        "Existing tests still pass; add a test that creates an appointment, asserts reminderSent defaults to false, flips it, saves, reloads, and asserts true",
+        "Build passes (mvn test and ./gradlew test)"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "Split from PRD US-009."
+    },
+    {
+      "id": "US-009b",
+      "title": "Scheduled 24h reminder job",
+      "description": "As an owner, I want a reminder email roughly 24 hours before my appointment so I don't forget. (Split from PRD US-009.)",
+      "acceptanceCriteria": [
+        "Add @EnableScheduling (new @Configuration class or on PetClinicApplication)",
+        "@Scheduled(cron = \"0 0 9 * * *\") job queries SCHEDULED appointments with reminder_sent = false and startTime between 24h and 48h from now (via injected Clock); calls AppointmentNotificationService.sendReminder for each; flips reminder_sent to true",
+        "Unit test with a fixed Clock asserts (a) the query window, (b) sendReminder is called once per matching appointment, (c) reminder_sent is true after the job, (d) re-running the job does not double-send",
+        "Build passes (mvn test and ./gradlew test)"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "Split from PRD US-009. Depends on US-008b (notification service) and US-009a (reminder_sent column)."
+    }
+  ]
+}

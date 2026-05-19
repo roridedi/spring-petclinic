@@ -49,6 +49,8 @@ public class Appointment extends BaseEntity {
 	@JoinColumn(name = "vet_id", nullable = false)
 	private Vet vet;
 
+	// @Future runs on every JPA pre-update, not just create — switch to a validation
+	// group if a flow ever needs to update a row whose startTime has already passed.
 	@Column(name = "start_time", nullable = false)
 	@DateTimeFormat(pattern = "yyyy-MM-dd'T'HH:mm")
 	@NotNull
